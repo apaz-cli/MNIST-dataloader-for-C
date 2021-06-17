@@ -1,196 +1,214 @@
 /*
+Cloned from:
 Takafumi Hoiruchi. 2018.
 https://github.com/takafumihoriuchi/MNIST_for_C
 */
 
+#include <fcntl.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <fcntl.h>
 #include <string.h>
+#include <unistd.h>
 
-// set appropriate path for data
-#define TRAIN_IMAGE "./data/train-images.idx3-ubyte"
-#define TRAIN_LABEL "./data/train-labels.idx1-ubyte"
-#define TEST_IMAGE "./data/t10k-images.idx3-ubyte"
-#define TEST_LABEL "./data/t10k-labels.idx1-ubyte"
+#define MNIST_IMG_SIZE 784  // 28*28
+#define MNIST_BOUNDCHECK 0
 
-#define SIZE 784 // 28*28
-#define NUM_TRAIN 60000
-#define NUM_TEST 10000
-#define LEN_INFO_IMAGE 4
-#define LEN_INFO_LABEL 2
-
-#define MAX_IMAGESIZE 1280
-#define MAX_BRIGHTNESS 255
-#define MAX_FILENAME 256
-#define MAX_NUM_OF_IMAGES 1
-
-unsigned char image[MAX_NUM_OF_IMAGES][MAX_IMAGESIZE][MAX_IMAGESIZE];
-int width[MAX_NUM_OF_IMAGES], height[MAX_NUM_OF_IMAGES];
-
-int info_image[LEN_INFO_IMAGE];
-int info_label[LEN_INFO_LABEL];
-
-unsigned char train_image_char[NUM_TRAIN][SIZE];
-unsigned char test_image_char[NUM_TEST][SIZE];
-unsigned char train_label_char[NUM_TRAIN][1];
-unsigned char test_label_char[NUM_TEST][1];
-
-double train_image[NUM_TRAIN][SIZE];
-double test_image[NUM_TEST][SIZE];
-int  train_label[NUM_TRAIN];
-int test_label[NUM_TEST];
-
-
-void FlipLong(unsigned char * ptr)
-{
-    register unsigned char val;
-    
-    // Swap 1st and 4th bytes
-    val = *(ptr);
-    *(ptr) = *(ptr+3);
-    *(ptr+3) = val;
-    
-    // Swap 2nd and 3rd bytes
-    ptr += 1;
-    val = *(ptr);
-    *(ptr) = *(ptr+1);
-    *(ptr+1) = val;
+static inline int
+mnist_reverseInt(int i) {
+    unsigned char c1, c2, c3, c4;
+    c1 = i & 255;
+    c2 = (i >> 8) & 255;
+    c3 = (i >> 16) & 255;
+    c4 = (i >> 24) & 255;
+    return ((int)c1 << 24) + ((int)c2 << 16) + ((int)c3 << 8) + c4;
 }
 
+#define mnist_panic(name, ac, ex)                                            \
+    {                                                                        \
+        printf("Read %s: %i, which did not match expected: %i.\n", name, ac, \
+               ex);                                                          \
+        exit(-1);                                                            \
+    }
 
-void read_mnist_char(char *file_path, int num_data, int len_info, int arr_n, unsigned char data_char[][arr_n], int info_arr[])
-{
-    int i, j, k, fd;
-    unsigned char *ptr;
-
+static inline unsigned char *
+read_mnist_images(char *file_path, int num_imgs) {
+    // Open file
+    int fd;
     if ((fd = open(file_path, O_RDONLY)) == -1) {
-        fprintf(stderr, "couldn't open image file");
+        fprintf(stderr, "Couldn't open mnist file: %s.", file_path);
         exit(-1);
     }
-    
-    read(fd, info_arr, len_info * sizeof(int));
-    
-    // read-in information about size of data
-    for (i=0; i<len_info; i++) { 
-        ptr = (unsigned char *)(info_arr + i);
-        FlipLong(ptr);
-        ptr = ptr + sizeof(int);
+
+    // Read header
+    int magic_number = 0, n_rows = 0, n_cols = 0, n_imgs = 0;
+    read(fd, &magic_number, 4);
+    magic_number = mnist_reverseInt(magic_number);
+    if (magic_number != 2051) mnist_panic("magic_number", magic_number, 2051);
+    read(fd, &n_imgs, 4);
+    n_imgs = mnist_reverseInt(n_imgs);
+    if (num_imgs != n_imgs) mnist_panic("n_imgs", n_imgs, num_imgs);
+    read(fd, &n_rows, 4);
+    n_rows = mnist_reverseInt(n_rows);
+    if (n_rows != 28) mnist_panic("n_rows", n_rows, 28);
+    read(fd, &n_cols, 4);
+    n_cols = mnist_reverseInt(n_cols);
+    if (n_cols != 28) mnist_panic("n_cols", n_cols, 28);
+
+    // Read all rasters at once
+    size_t buf_size = num_imgs * 784;
+    unsigned char *dataset = (unsigned char *)malloc(buf_size);
+    read(fd, dataset, buf_size);
+
+    // Close the file
+    if (close(fd) == -1) {
+        fprintf(stderr, "Couldn't close mnist file: %s.", file_path);
+        exit(-1);
     }
-    
-    // read-in mnist numbers (pixels|labels)
-    for (i=0; i<num_data; i++) {
-        read(fd, data_char[i], arr_n * sizeof(unsigned char));   
+    return dataset;
+}
+
+inline unsigned char *
+read_mnist_labels(char *file_path, int num_labels) {
+    typedef unsigned char uchar;
+
+    int fd;
+    if ((fd = open(file_path, O_RDONLY)) == -1) {
+        fprintf(stderr, "Couldn't open mnist file: %s.", file_path);
+        exit(-1);
     }
 
-    close(fd);
-}
+    int magic_number = 0, n_labels;
+    read(fd, &magic_number, 4);
+    magic_number = mnist_reverseInt(magic_number);
+    if (magic_number != 2049) mnist_panic("magic_number", magic_number, 2049);
+    read(fd, &n_labels, 4);
+    n_labels = mnist_reverseInt(n_labels);
+    if (num_labels != n_labels) mnist_panic("n_labels", n_labels, num_labels);
 
-
-void image_char2double(int num_data, unsigned char data_image_char[][SIZE], double data_image[][SIZE])
-{
-    int i, j;
-    for (i=0; i<num_data; i++)
-        for (j=0; j<SIZE; j++)
-            data_image[i][j]  = (double)data_image_char[i][j] / 255.0;
-}
-
-
-void label_char2int(int num_data, unsigned char data_label_char[][1], int data_label[])
-{
-    int i;
-    for (i=0; i<num_data; i++)
-        data_label[i]  = (int)data_label_char[i][0];
-}
-
-
-void load_mnist()
-{
-    read_mnist_char(TRAIN_IMAGE, NUM_TRAIN, LEN_INFO_IMAGE, SIZE, train_image_char, info_image);
-    image_char2double(NUM_TRAIN, train_image_char, train_image);
-
-    read_mnist_char(TEST_IMAGE, NUM_TEST, LEN_INFO_IMAGE, SIZE, test_image_char, info_image);
-    image_char2double(NUM_TEST, test_image_char, test_image);
-    
-    read_mnist_char(TRAIN_LABEL, NUM_TRAIN, LEN_INFO_LABEL, 1, train_label_char, info_label);
-    label_char2int(NUM_TRAIN, train_label_char, train_label);
-    
-    read_mnist_char(TEST_LABEL, NUM_TEST, LEN_INFO_LABEL, 1, test_label_char, info_label);
-    label_char2int(NUM_TEST, test_label_char, test_label);
-}
-
-
-void print_mnist_pixel(double data_image[][SIZE], int num_data)
-{
-    int i, j;
-    for (i=0; i<num_data; i++) {
-        printf("image %d/%d\n", i+1, num_data);
-        for (j=0; j<SIZE; j++) {
-            printf("%1.1f ", data_image[i][j]);
-            if ((j+1) % 28 == 0) putchar('\n');
-        }
-        putchar('\n');
+    unsigned char *dataset = (unsigned char *)malloc(num_labels);
+    for (int i = 0; i < num_labels; i++) {
+        read(fd, dataset + i, 1);
     }
+    return dataset;
 }
 
+// To get image i of images_60k_train and images_10k_test, use:
+struct MNIST {
+    unsigned char *train_60k;
+    unsigned char *label_60k;
+    unsigned char *test_10k;
+    unsigned char *label_10k;
+};
+typedef struct MNIST MNIST;
 
-void print_mnist_label(int data_label[], int num_data)
-{
-    int i;
-    if (num_data == NUM_TRAIN)
-        for (i=0; i<num_data; i++)
-            printf("train_label[%d]: %d\n", i, train_label[i]);
-    else
-        for (i=0; i<num_data; i++)
-            printf("test_label[%d]: %d\n", i, test_label[i]);
+inline MNIST *
+MNIST_load(MNIST *mnist, char *data_folder) {
+    char fname[256];
+    char f1[] = "train-images.idx3-ubyte";
+    char f2[] = "train-labels.idx1-ubyte";
+    char f3[] = "t10k-images.idx3-ubyte";
+    char f4[] = "t10k-labels.idx1-ubyte";
+
+    // String copy into fname, append '/' if
+    // it isn't there, and null terminate.
+    // Keep track of the end.
+    unsigned int i = 0;
+    while (data_folder[i] && i < 200) {
+        fname[i] = data_folder[i];
+        i++;
+    }
+    if (fname[i - 1] != '/') {
+        fname[i] = '/';
+        i++;
+    }
+
+    fname[i] = '\0';
+    mnist->train_60k = read_mnist_images(strcat(fname, f1), 60000);
+    fname[i] = '\0';
+    mnist->label_60k = read_mnist_labels(strcat(fname, f2), 60000);
+    fname[i] = '\0';
+    mnist->test_10k = read_mnist_images(strcat(fname, f3), 10000);
+    fname[i] = '\0';
+    mnist->label_10k = read_mnist_labels(strcat(fname, f4), 10000);
+
+    return mnist;
 }
 
+inline void
+MNIST_destroy(MNIST *mnist) {
+    free(mnist->train_60k);
+    free(mnist->label_60k);
+    free(mnist->test_10k);
+    free(mnist->label_10k);
+    free(mnist);
+}
 
-// name: path for saving image (ex: "./images/sample.pgm")
-void save_image(int n, char name[])
-{
-    char file_name[MAX_FILENAME];
+inline unsigned char *
+MNIST_train_img(MNIST *mnist, size_t i) {
+#if MNIST_BOUNDCHECK
+    if (i >= 60000) {
+        printf("Cannot get MNIST test image %zu, there are only 60k.\n", i);
+        exit(-1);
+    }
+#endif
+    return mnist->train_60k + (i * MNIST_IMG_SIZE);
+}
+
+inline unsigned char *
+MNIST_test_img(MNIST *mnist, size_t i) {
+#if MNIST_BOUNDCHECK
+    if (i >= 10000) {
+        printf("Cannot get MNIST test image %zu, there are only 10k.\n", i);
+        exit(-1);
+    }
+#endif
+    return mnist->test_10k + (i * MNIST_IMG_SIZE);
+}
+
+inline unsigned char
+MNIST_train_label(MNIST *mnist, size_t i) {
+#if MNIST_BOUNDCHECK
+    if (i >= 60000) {
+        printf("Cannot get MNIST train label %zu, there are only 60k.\n", i);
+        exit(-1);
+    }
+#endif
+    return mnist->label_60k[i];
+}
+
+inline unsigned char
+MNIST_test_label(MNIST *mnist, size_t i) {
+#if MNIST_BOUNDCHECK
+    if (i >= 10000) {
+        printf("Cannot get MNIST test label %zu, there are only 10k.\n", i);
+        exit(-1);
+    }
+#endif
+    return mnist->label_10k[i];
+}
+
+inline bool
+MNIST_save_image(unsigned char *image, char *fname) {
+    // Open/create file
     FILE *fp;
-    int x, y;
+    if ((fp = fopen(fname, "wb")) == NULL) return 1;
 
-    if (name[0] == '\0') {
-        printf("output file name (*.pgm) : ");
-        scanf("%s", file_name);
-    } else strcpy(file_name, name);
+    // Write header
+    if (fputs("P5\n"
+              "28\n"
+              "28\n"
+              "255\n",
+              fp) == EOF)
+        return 1;
 
-    if ( (fp=fopen(file_name, "wb"))==NULL ) {
-        printf("could not open file\n");
-        exit(1);
-    }
-
-    fputs("P5\n", fp);
-    fputs("# Created by Image Processing\n", fp);
-    fprintf(fp, "%d %d\n", width[n], height[n]);
-    fprintf(fp, "%d\n", MAX_BRIGHTNESS);
-    for (y=0; y<height[n]; y++)
-        for (x=0; x<width[n]; x++)
-            fputc(image[n][x][y], fp);
-        fclose(fp);
-        printf("Image was saved successfully\n");
-}
-
-
-// save mnist image (call for each image)
-// store train_image[][] into image[][][]
-void save_mnist_pgm(double data_image[][SIZE], int index)
-{
-    int n = 0; // id for image (set to 0)
-    int x, y;
-
-    width[n] = 28;
-    height[n] = 28;
-
-    for (y=0; y<height[n]; y++) {
-        for (x=0; x<width[n]; x++) {
-            image[n][x][y] = data_image[index][y * width[n] + x] * 255.0;
+    // Write raster
+    for (unsigned int y = 0; y < 28; y++) {
+        for (unsigned int x = 0; x < 28; x++) {
+            if (fputc(image[y * 28 + x], fp) == EOF) return 1;
         }
     }
 
-    save_image(n, "");
+    // Yeet
+    return fclose(fp) ? 1 : 0;
 }
