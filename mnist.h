@@ -1,9 +1,3 @@
-/*
-Cloned from:
-Takafumi Hoiruchi. 2018.
-https://github.com/takafumihoriuchi/MNIST_for_C
-*/
-
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -12,7 +6,10 @@ https://github.com/takafumihoriuchi/MNIST_for_C
 #include <unistd.h>
 
 #define MNIST_IMG_SIZE 784  // 28*28
+
+#ifndef MNIST_BOUNDCHECK
 #define MNIST_BOUNDCHECK 0
+#endif
 
 static inline int
 mnist_reverseInt(int i) {
@@ -56,7 +53,7 @@ read_mnist_images(char *file_path, int num_imgs) {
     if (n_cols != 28) mnist_panic("n_cols", n_cols, 28);
 
     // Read all rasters at once
-    size_t buf_size = num_imgs * 784;
+    size_t buf_size = num_imgs * MNIST_IMG_SIZE;
     unsigned char *dataset = (unsigned char *)malloc(buf_size);
     read(fd, dataset, buf_size);
 
@@ -93,7 +90,7 @@ read_mnist_labels(char *file_path, int num_labels) {
     return dataset;
 }
 
-// To get image i of images_60k_train and images_10k_test, use:
+// Use the accessors to get individual images.
 struct MNIST {
     unsigned char *train_60k;
     unsigned char *label_60k;
@@ -123,6 +120,7 @@ MNIST_load(MNIST *mnist, char *data_folder) {
         i++;
     }
 
+    // Load all the files
     fname[i] = '\0';
     mnist->train_60k = read_mnist_images(strcat(fname, f1), 60000);
     fname[i] = '\0';
@@ -141,7 +139,6 @@ MNIST_destroy(MNIST *mnist) {
     free(mnist->label_60k);
     free(mnist->test_10k);
     free(mnist->label_10k);
-    free(mnist);
 }
 
 inline unsigned char *
